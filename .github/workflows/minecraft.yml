@@ -1,0 +1,75 @@
+name: RLCraft temporal
+
+on:
+  workflow_dispatch:
+    inputs:
+      runtime_minutes:
+        description: Minutos de ejecucion para una prueba manual
+        required: true
+        default: 60
+        type: number
+  schedule:
+    - cron: "0 5,11 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rlcraft-server
+  cancel-in-progress: false
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+      AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+      AZURE_SHARE_NAME: ${{ secrets.AZURE_SHARE_NAME }}
+      PLAYIT_SECRET: ${{ secrets.PLAYIT_SECRET }}
+      SERVER_JAR: ${{ vars.SERVER_JAR }}
+      JAVA_OPTS: ${{ vars.JAVA_OPTS }}
+      RUNTIME_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.runtime_minutes || 335 }}
+
+    steps:
+      - name: Obtener configuracion
+        uses: actions/checkout@v4
+
+      - name: Instalar Java 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cifs-utils rsync
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/playit" \
+            https://github.com/playit-cloud/playit-agent/releases/download/v1.0.10/playit-linux-amd64
+          echo "2df7d9f10227ab312b1ad341853db4e8a8243df5cfcdbae58713a4271711c339  $RUNNER_TEMP/playit" | sha256sum --check
+          chmod 700 "$RUNNER_TEMP/playit"
+
+      - name: Montar Azure Files
+        run: |
+          [[ "$AZURE_STORAGE_ACCOUNT" =~ ^[a-z0-9]{3,24}$ ]] || { echo "AZURE_STORAGE_ACCOUNT invalido"; exit 1; }
+          [[ "$AZURE_SHARE_NAME" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || { echo "AZURE_SHARE_NAME invalido"; exit 1; }
+
+          sudo mkdir -p /mnt/azure
+          printf 'username=%s\npassword=%s\n' "$AZURE_STORAGE_ACCOUNT" "$AZURE_STORAGE_KEY" \
+            | sudo tee /etc/smbcredentials-rlcraft >/dev/null
+          sudo chmod 600 /etc/smbcredentials-rlcraft
+          sudo mount -t cifs \
+            "//$AZURE_STORAGE_ACCOUNT.file.core.windows.net/$AZURE_SHARE_NAME" \
+            /mnt/azure \
+            -o "credentials=/etc/smbcredentials-rlcraft,vers=3.0,serverino,nosharesock,actimeo=30,mfsymlinks,uid=$(id -u),gid=$(id -g),dir_mode=0770,file_mode=0660"
+
+      - name: Ejecutar RLCraft
+        run: bash ./scripts/run-server.sh
+
+      - name: Desmontar Azure Files
+        if: always()
+        run: |
+          sudo umount /mnt/azure || true
+          sudo rm -f /etc/smbcredentials-rlcraft
