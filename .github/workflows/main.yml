@@ -29,6 +29,7 @@ jobs:
       PLAYIT_SECRET: ${{ secrets.PLAYIT_SECRET }}
       SERVER_JAR: ${{ vars.SERVER_JAR }}
       JAVA_OPTS: ${{ vars.JAVA_OPTS }}
+      OPS: ${{ vars.OPS }}
       RUNTIME_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.runtime_minutes || 335 }}
 
     steps:
