@@ -57,6 +57,33 @@ run_playit() {
 	done
 }
 
+configure_ops() {
+	[[ -n "${OPS:-}" ]] || return 0
+
+	for _ in $(seq 1 300); do
+		kill -0 "$SERVER_PID" 2>/dev/null || return 0
+		if grep -Fq "Done (" logs/latest.log 2>/dev/null; then
+			local raw_name name
+			local operator_names=()
+			IFS=',' read -r -a operator_names <<<"$OPS"
+
+			for raw_name in "${operator_names[@]}"; do
+				name="${raw_name//[[:space:]]/}"
+				if [[ "$name" =~ ^[A-Za-z0-9_]{1,16}$ ]]; then
+					echo "Concediendo operador a $name..."
+					send_command "op $name"
+				else
+					echo "Nombre de operador invalido ignorado: $raw_name"
+				fi
+			done
+			return 0
+		fi
+		sleep 2
+	done
+
+	echo "Minecraft no termino de arrancar a tiempo para configurar OPS."
+}
+
 cleanup() {
 	local original_status=$?
 	trap - EXIT INT TERM
@@ -174,6 +201,7 @@ end_time=$(($(date +%s) + RUNTIME_MINUTES * 60))
 run_playit &
 PLAYIT_PID=$!
 echo "Supervisor de playit iniciado en segundo plano."
+configure_ops
 
 while kill -0 "$SERVER_PID" 2>/dev/null; do
 	remaining=$((end_time - $(date +%s)))
