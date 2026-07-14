@@ -151,13 +151,26 @@ docker run --rm --network host --name rlcraft-playit \
 	ghcr.io/playit-cloud/playit-agent:1.0 &
 PLAYIT_PID=$!
 
-sleep 5
-if [[ "$(docker inspect --format '{{.State.Running}}' rlcraft-playit 2>/dev/null || true)" != true ]]; then
-	wait "$PLAYIT_PID" || true
-	echo "El agente de playit no pudo iniciar. Revisa PLAYIT_SECRET."
+playit_connected=false
+for _ in $(seq 1 30); do
+	if [[ "$(docker inspect --format '{{.State.Running}}' rlcraft-playit 2>/dev/null || true)" != true ]]; then
+		wait "$PLAYIT_PID" || true
+		echo "El agente de playit termino antes de conectarse. Revisa PLAYIT_SECRET."
+		exit 1
+	fi
+
+	if docker logs rlcraft-playit 2>&1 | grep -Fq "playit connected; tunnels loaded"; then
+		playit_connected=true
+		break
+	fi
+	sleep 2
+done
+
+if [[ "$playit_connected" != true ]]; then
+	echo "El agente de playit no alcanzo ningun relay despues de 60 segundos."
 	exit 1
 fi
-echo "Agente de playit conectado."
+echo "Agente de playit conectado y tuneles cargados."
 
 java "${java_options[@]}" -jar "$SERVER_JAR" nogui <server.stdin &
 SERVER_PID=$!
