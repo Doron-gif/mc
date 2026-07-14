@@ -38,6 +38,25 @@ sync_live_world() {
 	return "$result"
 }
 
+run_playit() {
+	local attempt=1
+
+	while kill -0 "$SERVER_PID" 2>/dev/null; do
+		echo "Iniciando agente de playit (intento $attempt)..."
+		if docker run --rm --network host --name rlcraft-playit \
+			-e SECRET_KEY="$PLAYIT_SECRET" \
+			ghcr.io/playit-cloud/playit-agent:1.0; then
+			echo "El agente de playit termino normalmente."
+		else
+			echo "El agente de playit fallo; reintentando con otro relay en 10 segundos."
+		fi
+
+		kill -0 "$SERVER_PID" 2>/dev/null || break
+		sleep 10
+		attempt=$((attempt + 1))
+	done
+}
+
 cleanup() {
 	local original_status=$?
 	trap - EXIT INT TERM
@@ -146,37 +165,15 @@ mkfifo server.stdin
 exec 3<>server.stdin
 CONSOLE_FD_OPEN=true
 
-docker run --rm --network host --name rlcraft-playit \
-	-e SECRET_KEY="$PLAYIT_SECRET" \
-	ghcr.io/playit-cloud/playit-agent:1.0 &
-PLAYIT_PID=$!
-
-playit_connected=false
-for _ in $(seq 1 30); do
-	if [[ "$(docker inspect --format '{{.State.Running}}' rlcraft-playit 2>/dev/null || true)" != true ]]; then
-		wait "$PLAYIT_PID" || true
-		echo "El agente de playit termino antes de conectarse. Revisa PLAYIT_SECRET."
-		exit 1
-	fi
-
-	if docker logs rlcraft-playit 2>&1 | grep -Fq "playit connected; tunnels loaded"; then
-		playit_connected=true
-		break
-	fi
-	sleep 2
-done
-
-if [[ "$playit_connected" != true ]]; then
-	echo "El agente de playit no alcanzo ningun relay despues de 60 segundos."
-	exit 1
-fi
-echo "Agente de playit conectado y tuneles cargados."
-
 java "${java_options[@]}" -jar "$SERVER_JAR" nogui <server.stdin &
 SERVER_PID=$!
 
 echo "RLCraft iniciado por $RUNTIME_MINUTES minutos."
 end_time=$(($(date +%s) + RUNTIME_MINUTES * 60))
+
+run_playit &
+PLAYIT_PID=$!
+echo "Supervisor de playit iniciado en segundo plano."
 
 while kill -0 "$SERVER_PID" 2>/dev/null; do
 	remaining=$((end_time - $(date +%s)))
