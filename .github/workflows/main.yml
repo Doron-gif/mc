@@ -45,11 +45,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cifs-utils rsync
-          curl --fail --location --retry 3 \
-            --output "$RUNNER_TEMP/playit" \
-            https://github.com/playit-cloud/playit-agent/releases/download/v1.0.10/playit-linux-amd64
-          echo "2df7d9f10227ab312b1ad341853db4e8a8243df5cfcdbae58713a4271711c339  $RUNNER_TEMP/playit" | sha256sum --check
-          chmod 700 "$RUNNER_TEMP/playit"
+          docker pull ghcr.io/playit-cloud/playit-agent:1.0
 
       - name: Montar Azure Files
         run: |
