@@ -3,7 +3,6 @@ set -Eeuo pipefail
 
 readonly REMOTE_DIR=/mnt/azure/minecraft
 readonly LOCAL_DIR="$RUNNER_TEMP/minecraft"
-readonly PLAYIT_BIN="$RUNNER_TEMP/playit"
 readonly BACKUP_INTERVAL=900
 readonly FORGE_VERSION=1.12.2-14.23.5.2860
 readonly FORGE_INSTALLER="forge-$FORGE_VERSION-installer.jar"
@@ -69,8 +68,10 @@ cleanup() {
 		fi
 	fi
 
-	if [[ -n "$PLAYIT_PID" ]] && kill -0 "$PLAYIT_PID" 2>/dev/null; then
-		kill "$PLAYIT_PID"
+	if docker inspect rlcraft-playit >/dev/null 2>&1; then
+		docker stop --time 10 rlcraft-playit >/dev/null
+	fi
+	if [[ -n "$PLAYIT_PID" ]]; then
 		wait "$PLAYIT_PID"
 	fi
 
@@ -145,8 +146,18 @@ mkfifo server.stdin
 exec 3<>server.stdin
 CONSOLE_FD_OPEN=true
 
-SECRET_KEY="$PLAYIT_SECRET" "$PLAYIT_BIN" &
+docker run --rm --network host --name rlcraft-playit \
+	-e SECRET_KEY="$PLAYIT_SECRET" \
+	ghcr.io/playit-cloud/playit-agent:1.0 &
 PLAYIT_PID=$!
+
+sleep 5
+if [[ "$(docker inspect --format '{{.State.Running}}' rlcraft-playit 2>/dev/null || true)" != true ]]; then
+	wait "$PLAYIT_PID" || true
+	echo "El agente de playit no pudo iniciar. Revisa PLAYIT_SECRET."
+	exit 1
+fi
+echo "Agente de playit conectado."
 
 java "${java_options[@]}" -jar "$SERVER_JAR" nogui <server.stdin &
 SERVER_PID=$!
