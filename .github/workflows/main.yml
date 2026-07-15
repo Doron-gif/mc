@@ -6,7 +6,7 @@ on:
       runtime_minutes:
         description: Minutos de ejecucion para una prueba manual
         required: true
-        default: 60
+        default: 335
         type: number
   schedule:
     - cron: "0 5,11 * * *"
