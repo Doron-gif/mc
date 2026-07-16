@@ -9,7 +9,7 @@ on:
         default: 335
         type: number
   schedule:
-    - cron: "0 5,11 * * *"
+    - cron: "0 19,1 * * *"
 
 permissions:
   contents: read
