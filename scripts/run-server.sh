@@ -149,10 +149,10 @@ trap 'exit 143' TERM
 mkdir -p "$LOCAL_DIR"
 
 echo "Verificando conexion con Oracle Cloud y el bucket..."
-if ! rclone about "$REMOTE_PATH" >/dev/null 2>&1; then
+if ! rclone lsf "$REMOTE_PATH/" --max-depth 1 >/dev/null 2>&1; then
     echo "ERROR CRITICO: No se pudo conectar a Oracle Cloud o el bucket '$REMOTE_PATH' no existe/no es accesible."
     echo "Ejecutando prueba detallada para mostrar el error:"
-    rclone about "$REMOTE_PATH"
+    rclone lsf "$REMOTE_PATH/" --max-depth 1
     exit 1
 fi
 echo "Conexion con Oracle Cloud exitosa."
