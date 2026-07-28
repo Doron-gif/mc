@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly REMOTE_PATH="oracle-mc:minecraft-backup"
+readonly REMOTE_PATH="oracle-mc:minecraft-bucket"
 readonly LOCAL_DIR="$RUNNER_TEMP/minecraft"
 readonly BACKUP_INTERVAL=900
 readonly FORGE_VERSION=1.12.2-14.23.5.2860
