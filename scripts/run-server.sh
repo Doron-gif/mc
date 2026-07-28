@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly REMOTE_DIR=/mnt/azure/minecraft
+readonly REMOTE_PATH="oracle-mc:minecraft-backup"
 readonly LOCAL_DIR="$RUNNER_TEMP/minecraft"
 readonly BACKUP_INTERVAL=900
 readonly FORGE_VERSION=1.12.2-14.23.5.2860
@@ -14,118 +14,119 @@ CONSOLE_FD_OPEN=false
 STATE_LOADED=false
 
 sync_files() {
-	rsync -rt --delete --modify-window=1 \
-		--no-perms --no-owner --no-group \
-		--exclude server.stdin \
-		"$LOCAL_DIR/" "$REMOTE_DIR/"
+    rclone sync "$LOCAL_DIR/" "$REMOTE_PATH/" \
+        --exclude "server.stdin" \
+        --fast-list \
+        --transfers=8 \
+        --checkers=8
 }
 
 send_command() {
-	if [[ "$CONSOLE_FD_OPEN" == true ]] && [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
-		printf '%s\n' "$1" >&3
-	fi
+    if [[ "$CONSOLE_FD_OPEN" == true ]] && [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        printf '%s\n' "$1" >&3
+    fi
 }
 
 sync_live_world() {
-	echo "Pausando guardado para crear un respaldo consistente..."
-	send_command "save-off"
-	send_command "save-all flush"
-	sleep 10
+    echo "Pausando guardado para crear un respaldo consistente en Oracle..."
+    send_command "save-off"
+    send_command "save-all flush"
+    sleep 10
 
-	local result=0
-	sync_files || result=$?
-	send_command "save-on"
-	return "$result"
+    local result=0
+    sync_files || result=$?
+    send_command "save-on"
+    return "$result"
 }
 
 run_playit() {
-	local attempt=1
+    local attempt=1
 
-	while kill -0 "$SERVER_PID" 2>/dev/null; do
-		echo "Iniciando agente de playit (intento $attempt)..."
-		if docker run --rm --network host --name rlcraft-playit \
-			-e SECRET_KEY="$PLAYIT_SECRET" \
-			ghcr.io/playit-cloud/playit-agent:1.0; then
-			echo "El agente de playit termino normalmente."
-		else
-			echo "El agente de playit fallo; reintentando con otro relay en 10 segundos."
-		fi
+    while kill -0 "$SERVER_PID" 2>/dev/null; do
+        echo "Iniciando agente de playit (intento $attempt)..."
+        if docker run --rm --network host --name minecraft-playit \
+            -e SECRET_KEY="$PLAYIT_SECRET" \
+            ghcr.io/playit-cloud/playit-agent:1.0; then
+            echo "El agente de playit termino normalmente."
+        else
+            echo "El agente de playit fallo; reintentando con otro relay en 10 segundos."
+        fi
 
-		kill -0 "$SERVER_PID" 2>/dev/null || break
-		sleep 10
-		attempt=$((attempt + 1))
-	done
+        kill -0 "$SERVER_PID" 2>/dev/null || break
+        sleep 10
+        attempt=$((attempt + 1))
+    done
 }
 
 configure_ops() {
-	[[ -n "${OPS:-}" ]] || return 0
+    [[ -n "${OPS:-}" ]] || return 0
 
-	for _ in $(seq 1 300); do
-		kill -0 "$SERVER_PID" 2>/dev/null || return 0
-		if grep -Fq "Done (" logs/latest.log 2>/dev/null; then
-			local raw_name name
-			local operator_names=()
-			IFS=',' read -r -a operator_names <<<"$OPS"
+    for _ in $(seq 1 300); do
+        kill -0 "$SERVER_PID" 2>/dev/null || return 0
+        if grep -Fq "Done (" logs/latest.log 2>/dev/null; then
+            local raw_name name
+            local operator_names=()
+            IFS=',' read -r -a operator_names <<<"$OPS"
 
-			for raw_name in "${operator_names[@]}"; do
-				name="${raw_name//[[:space:]]/}"
-				if [[ "$name" =~ ^[A-Za-z0-9_]{1,16}$ ]]; then
-					echo "Concediendo operador a $name..."
-					send_command "op $name"
-				else
-					echo "Nombre de operador invalido ignorado: $raw_name"
-				fi
-			done
-			return 0
-		fi
-		sleep 2
-	done
+            for raw_name in "${operator_names[@]}"; do
+                name="${raw_name//[[:space:]]/}"
+                if [[ "$name" =~ ^[A-Za-z0-9_]{1,16}$ ]]; then
+                    echo "Concediendo operador a $name..."
+                    send_command "op $name"
+                else
+                    echo "Nombre de operador invalido ignorado: $raw_name"
+                fi
+            done
+            return 0
+        fi
+        sleep 2
+    done
 
-	echo "Minecraft no termino de arrancar a tiempo para configurar OPS."
+    echo "Minecraft no termino de arrancar a tiempo para configurar OPS."
 }
 
 cleanup() {
-	local original_status=$?
-	trap - EXIT INT TERM
-	set +e
+    local original_status=$?
+    trap - EXIT INT TERM
+    set +e
 
-	if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
-		echo "Deteniendo Minecraft de forma segura..."
-		send_command "save-all flush"
-		sleep 10
-		send_command "stop"
+    if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo "Deteniendo Minecraft de forma segura..."
+        send_command "save-all flush"
+        sleep 10
+        send_command "stop"
 
-		for _ in $(seq 1 120); do
-			kill -0 "$SERVER_PID" 2>/dev/null || break
-			sleep 1
-		done
+        for _ in $(seq 1 120); do
+            kill -0 "$SERVER_PID" 2>/dev/null || break
+            sleep 1
+        done
 
-		if kill -0 "$SERVER_PID" 2>/dev/null; then
-			echo "Minecraft no respondio a stop; enviando SIGTERM."
-			kill -TERM "$SERVER_PID"
-		fi
-		wait "$SERVER_PID"
-	fi
+        if kill -0 "$SERVER_PID" 2>/dev/null; then
+            echo "Minecraft no respondio a stop; enviando SIGTERM."
+            kill -TERM "$SERVER_PID"
+        fi
+        wait "$SERVER_PID"
+    fi
 
-	if [[ "$STATE_LOADED" == true ]]; then
-		echo "Sincronizando estado final con Azure Files..."
-		if ! sync_files && ((original_status == 0)); then
-			original_status=1
-		fi
-	fi
+    if [[ "$STATE_LOADED" == true ]]; then
+        echo "Sincronizando estado final con Oracle Cloud..."
+        if ! sync_files && ((original_status == 0)); then
+            original_status=1
+        fi
+    fi
 
-	if docker inspect rlcraft-playit >/dev/null 2>&1; then
-		docker stop --time 10 rlcraft-playit >/dev/null
-	fi
-	if [[ -n "$PLAYIT_PID" ]]; then
-		wait "$PLAYIT_PID"
-	fi
+    if docker inspect minecraft-playit >/dev/null 2>&1; then
+        docker stop --time 10 minecraft-playit >/dev/null
+    fi
+    if [[ -n "$PLAYIT_PID" ]]; then
+        wait "$PLAYIT_PID"
+    fi
 
-	if [[ "$CONSOLE_FD_OPEN" == true ]]; then
-		exec 3>&-
-	fi
+    if [[ "$CONSOLE_FD_OPEN" == true ]]; then
+        exec 3>&-
+    fi
 
-	exit "$original_status"
+    exit "$original_status"
 }
 
 trap cleanup EXIT
@@ -133,58 +134,55 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 [[ "$RUNTIME_MINUTES" =~ ^[0-9]+$ ]] || {
-	echo "RUNTIME_MINUTES debe ser numerico"
-	exit 1
+    echo "RUNTIME_MINUTES debe ser numerico"
+    exit 1
 }
 ((RUNTIME_MINUTES >= 1 && RUNTIME_MINUTES <= 335)) || {
-	echo "RUNTIME_MINUTES debe estar entre 1 y 335"
-	exit 1
+    echo "RUNTIME_MINUTES debe estar entre 1 y 335"
+    exit 1
 }
 [[ -n "${PLAYIT_SECRET:-}" ]] || {
-	echo "Falta el secreto PLAYIT_SECRET"
-	exit 1
-}
-[[ -d "$REMOTE_DIR" ]] || {
-	echo "Falta la carpeta $REMOTE_DIR en Azure Files"
-	exit 1
+    echo "Falta el secreto PLAYIT_SECRET"
+    exit 1
 }
 
 mkdir -p "$LOCAL_DIR"
-echo "Restaurando servidor desde Azure Files..."
-rsync -rt --delete --modify-window=1 --no-perms --no-owner --no-group "$REMOTE_DIR/" "$LOCAL_DIR/"
+echo "Restaurando servidor desde Oracle Cloud..."
+rclone sync "$REMOTE_PATH/" "$LOCAL_DIR/" --fast-list || true
 STATE_LOADED=true
 cd "$LOCAL_DIR"
 
 if [[ -z "${SERVER_JAR:-}" ]] && [[ ! -f "forge-$FORGE_VERSION.jar" ]]; then
-	echo "Forge no esta instalado; preparando $FORGE_VERSION..."
-	curl --fail --location --retry 3 \
-		--output "$FORGE_INSTALLER" \
-		"https://maven.minecraftforge.net/net/minecraftforge/forge/$FORGE_VERSION/$FORGE_INSTALLER"
-	echo "$FORGE_INSTALLER_SHA1  $FORGE_INSTALLER" | sha1sum --check
-	java -jar "$FORGE_INSTALLER" --installServer
-	rm -f "$FORGE_INSTALLER" "$FORGE_INSTALLER.log"
+    echo "Forge no esta instalado; preparando $FORGE_VERSION..."
+    curl --fail --location --retry 3 \
+        --output "$FORGE_INSTALLER" \
+        "https://maven.minecraftforge.net/net/minecraftforge/forge/$FORGE_VERSION/$FORGE_INSTALLER"
+    echo "$FORGE_INSTALLER_SHA1  $FORGE_INSTALLER" | sha1sum --check
+    java -jar "$FORGE_INSTALLER" --installServer
+    rm -f "$FORGE_INSTALLER" "$FORGE_INSTALLER.log"
 
-	[[ -f "forge-$FORGE_VERSION.jar" ]] || {
-		echo "El instalador no genero forge-$FORGE_VERSION.jar"
-		exit 1
-	}
+    [[ -f "forge-$FORGE_VERSION.jar" ]] || {
+        echo "El instalador no genero forge-$FORGE_VERSION.jar"
+        exit 1
+    }
 fi
 
 if [[ -z "${SERVER_JAR:-}" ]]; then
-	SERVER_JAR="forge-$FORGE_VERSION.jar"
+    SERVER_JAR="forge-$FORGE_VERSION.jar"
 fi
 
 [[ -f "$SERVER_JAR" ]] || {
-	echo "No existe $SERVER_JAR"
-	exit 1
-}
-grep -Eiq '^eula=true$' eula.txt 2>/dev/null || {
-	echo "Falta eula.txt con eula=true en el servidor almacenado en Azure."
-	exit 1
+    echo "No existe $SERVER_JAR"
+    exit 1
 }
 
+if ! grep -Eiq '^eula=true$' eula.txt 2>/dev/null; then
+    echo "Aceptando el EULA..."
+    echo "eula=true" > eula.txt
+fi
+
 if [[ -z "${JAVA_OPTS:-}" ]]; then
-	JAVA_OPTS="-Xms2G -Xmx5G -XX:+UseG1GC -XX:MaxGCPauseMillis=100"
+    JAVA_OPTS="-Xms2G -Xmx5G -XX:+UseG1GC -XX:MaxGCPauseMillis=100"
 fi
 read -r -a java_options <<<"$JAVA_OPTS"
 
@@ -195,7 +193,7 @@ CONSOLE_FD_OPEN=true
 java "${java_options[@]}" -jar "$SERVER_JAR" nogui <server.stdin &
 SERVER_PID=$!
 
-echo "RLCraft iniciado por $RUNTIME_MINUTES minutos."
+echo "Servidor iniciado por $RUNTIME_MINUTES minutos."
 end_time=$(($(date +%s) + RUNTIME_MINUTES * 60))
 
 run_playit &
@@ -204,19 +202,19 @@ echo "Supervisor de playit iniciado en segundo plano."
 configure_ops
 
 while kill -0 "$SERVER_PID" 2>/dev/null; do
-	remaining=$((end_time - $(date +%s)))
-	((remaining > 0)) || break
+    remaining=$((end_time - $(date +%s)))
+    ((remaining > 0)) || break
 
-	if ((remaining > BACKUP_INTERVAL)); then
-		sleep "$BACKUP_INTERVAL"
-		kill -0 "$SERVER_PID" 2>/dev/null && sync_live_world
-	else
-		sleep "$remaining"
-	fi
+    if ((remaining > BACKUP_INTERVAL)); then
+        sleep "$BACKUP_INTERVAL"
+        kill -0 "$SERVER_PID" 2>/dev/null && sync_live_world
+    else
+        sleep "$remaining"
+    fi
 done
 
 if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-	wait "$SERVER_PID" || true
-	echo "Minecraft termino antes del tiempo configurado."
-	exit 1
+    wait "$SERVER_PID" || true
+    echo "Minecraft termino antes del tiempo configurado."
+    exit 1
 fi
