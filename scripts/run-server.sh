@@ -162,6 +162,7 @@ rclone sync "$REMOTE_PATH/" "$LOCAL_DIR/" --fast-list
 STATE_LOADED=true
 cd "$LOCAL_DIR"
 
+FRESH_INSTALL=false
 if [[ -z "${SERVER_JAR:-}" ]] && [[ ! -f "forge-$FORGE_VERSION.jar" ]]; then
     echo "Forge no esta instalado; preparando $FORGE_VERSION..."
     curl --fail --location --retry 3 \
@@ -175,6 +176,7 @@ if [[ -z "${SERVER_JAR:-}" ]] && [[ ! -f "forge-$FORGE_VERSION.jar" ]]; then
         echo "El instalador no genero forge-$FORGE_VERSION.jar"
         exit 1
     }
+    FRESH_INSTALL=true
 fi
 
 if [[ -z "${SERVER_JAR:-}" ]]; then
@@ -189,6 +191,13 @@ fi
 if ! grep -Eiq '^eula=true$' eula.txt 2>/dev/null; then
     echo "Aceptando el EULA..."
     echo "eula=true" > eula.txt
+    FRESH_INSTALL=true
+fi
+
+# Si fue una instalación o configuración inicial limpia, sube los archivos al bucket de inmediato
+if [[ "$FRESH_INSTALL" == true ]]; then
+    echo "Instalación limpia detectada. Subiendo archivos iniciales al bucket de Oracle Cloud..."
+    sync_files
 fi
 
 if [[ -z "${JAVA_OPTS:-}" ]]; then
