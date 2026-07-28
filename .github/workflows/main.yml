@@ -1,4 +1,4 @@
-name: RLCraft temporal
+name: Minecraft Server 1.12.2
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: rlcraft-server
+  group: minecraft-server
   cancel-in-progress: false
 
 jobs:
@@ -23,9 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     env:
-      AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
-      AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
-      AZURE_SHARE_NAME: ${{ secrets.AZURE_SHARE_NAME }}
       PLAYIT_SECRET: ${{ secrets.PLAYIT_SECRET }}
       SERVER_JAR: ${{ vars.SERVER_JAR }}
       JAVA_OPTS: ${{ vars.JAVA_OPTS }}
@@ -45,28 +42,13 @@ jobs:
       - name: Instalar dependencias
         run: |
           sudo apt-get update
-          sudo apt-get install -y cifs-utils rsync
+          sudo apt-get install -y rclone
           docker pull ghcr.io/playit-cloud/playit-agent:1.0
 
-      - name: Montar Azure Files
+      - name: Configurar Oracle S3 (rclone)
         run: |
-          [[ "$AZURE_STORAGE_ACCOUNT" =~ ^[a-z0-9]{3,24}$ ]] || { echo "AZURE_STORAGE_ACCOUNT invalido"; exit 1; }
-          [[ "$AZURE_SHARE_NAME" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || { echo "AZURE_SHARE_NAME invalido"; exit 1; }
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
 
-          sudo mkdir -p /mnt/azure
-          printf 'username=%s\npassword=%s\n' "$AZURE_STORAGE_ACCOUNT" "$AZURE_STORAGE_KEY" \
-            | sudo tee /etc/smbcredentials-rlcraft >/dev/null
-          sudo chmod 600 /etc/smbcredentials-rlcraft
-          sudo mount -t cifs \
-            "//$AZURE_STORAGE_ACCOUNT.file.core.windows.net/$AZURE_SHARE_NAME" \
-            /mnt/azure \
-            -o "credentials=/etc/smbcredentials-rlcraft,vers=3.0,serverino,nosharesock,actimeo=30,mfsymlinks,uid=$(id -u),gid=$(id -g),dir_mode=0770,file_mode=0660"
-
-      - name: Ejecutar RLCraft
+      - name: Ejecutar Servidor
         run: bash ./scripts/run-server.sh
-
-      - name: Desmontar Azure Files
-        if: always()
-        run: |
-          sudo umount /mnt/azure || true
-          sudo rm -f /etc/smbcredentials-rlcraft
