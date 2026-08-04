@@ -1,4 +1,4 @@
-name: Minecraft Server 1.12.2
+name: Minecraft Paper Crossplay
 
 on:
   workflow_dispatch:
@@ -24,25 +24,34 @@ jobs:
     timeout-minutes: 355
     env:
       PLAYIT_SECRET: ${{ secrets.PLAYIT_SECRET }}
-      SERVER_JAR: ${{ vars.SERVER_JAR }}
+      AUTH_DB_HOST: ${{ secrets.AUTH_DB_HOST }}
+      AUTH_DB_USER: ${{ secrets.AUTH_DB_USER }}
+      AUTH_DB_PASSWORD: ${{ secrets.AUTH_DB_PASSWORD }}
+      AUTH_DB_PORT: ${{ vars.AUTH_DB_PORT || '5432' }}
+      AUTH_DB_NAME: ${{ vars.AUTH_DB_NAME || 'postgres' }}
+      AUTH_DB_TABLE: ${{ vars.AUTH_DB_TABLE || 'authme' }}
+      PAPER_VERSION: ${{ vars.PAPER_VERSION || '26.2' }}
       JAVA_OPTS: ${{ vars.JAVA_OPTS }}
       OPS: ${{ vars.OPS }}
       RUNTIME_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.runtime_minutes || 335 }}
 
     steps:
+      - name: Reservar margen para el cierre
+        run: echo "RUN_DEADLINE_EPOCH=$(($(date +%s) + 335 * 60))" >> "$GITHUB_ENV"
+
       - name: Obtener configuracion
         uses: actions/checkout@v4
 
-      - name: Instalar Java 8
+      - name: Instalar Java 25
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "8"
+          java-version: "25"
 
       - name: Instalar dependencias
         run: |
           sudo apt-get update
-          sudo apt-get install -y rclone
+          sudo apt-get install -y jq libargon2-1 postgresql-client python3-yaml rclone
           docker pull ghcr.io/playit-cloud/playit-agent:1.0
 
       - name: Configurar Oracle S3 (rclone)
