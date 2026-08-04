@@ -1,65 +1,169 @@
-# RLCraft temporal con GitHub Actions
+# Servidor Paper no-premium con crossplay
 
-Servidor experimental de RLCraft 1.12.2 ejecutado en dos turnos diarios. El horario configurado es:
+Servidor temporal de **Paper 26.2** para Minecraft Java no-premium y Minecraft
+Bedrock de Android. El workflow usa Java 25 y actualiza en cada arranque:
 
-- 00:00 de Peru: primer turno.
-- 06:00 de Peru: segundo turno.
-- Cada turno permite hasta 335 minutos para dejar margen antes del limite de seis horas del runner.
-- GitHub puede retrasar los jobs programados, por lo que no se garantiza disponibilidad continua hasta las 12:00.
+- La compilacion estable mas reciente de Paper 26.2.
+- Geyser-Spigot, que traduce el protocolo Bedrock al de Java.
+- Floodgate-Spigot, que identifica jugadores Bedrock.
+- AuthMe 6.0.0 para `/register` y `/login`.
 
-El servidor se ejecuta en el disco local del runner. Cada 15 minutos se pausa el guardado, se ejecuta `save-all flush`, se sincroniza con Azure Files y se reactiva el guardado. Al finalizar se envia `stop` y se realiza una sincronizacion final.
+Geyser soporta actualmente Bedrock 26.0 a 26.40 y Java 26.2. Se actualiza en
+cada arranque porque Bedrock de Android tambien se actualiza automaticamente.
 
-## Preparar Azure Files
-
-Crea una carpeta llamada `minecraft` en la raiz del File Share. Sube dentro de ella el contenido completo del Server Pack oficial de RLCraft, no el modpack de cliente.
-
-La estructura minima esperada es:
+## Como entran los jugadores
 
 ```text
-minecraft/
-  eula.txt
-  server.properties
-  mods/
-  config/
-  scripts/
+Java no-premium -> playit TCP -> Paper :25565 -> AuthMe -> Supabase Postgres
+Android         -> playit UDP -> Geyser :19132 -> Floodgate -> AuthMe
 ```
 
-`eula.txt` debe contener `eula=true`. Para permitir clientes sin autenticacion oficial, `server.properties` debe contener `online-mode=false`.
+El servidor usa `online-mode=false`. Todo jugador nuevo, incluido Bedrock, se
+registra una sola vez:
 
-Es normal que este Server Pack no incluya los JAR. En el primer arranque, el workflow descarga el instalador oficial, verifica su SHA-1 e instala Forge `14.23.5.2860`. Los archivos `forge-1.12.2-14.23.5.2860.jar`, `minecraft_server.1.12.2.jar` y `libraries/` se guardaran despues en Azure Files.
+```text
+/register contraseña contraseña
+```
 
-Conserva esta version de Forge aunque exista una mas reciente, porque es la version utilizada por RLCraft 2.9.3.
+En las siguientes conexiones usa:
 
-## Secretos de GitHub
+```text
+/login contraseña
+```
 
-Configura estos secretos en `Settings > Secrets and variables > Actions`:
+Se exige una contraseña de al menos 10 caracteres. Debe ser exclusiva para
+este servidor y no reutilizarse en correo, Microsoft, Discord ni otros sitios.
 
-| Secreto                 | Contenido                             |
-| ----------------------- | ------------------------------------- |
-| `AZURE_STORAGE_ACCOUNT` | Nombre de la cuenta de almacenamiento |
-| `AZURE_STORAGE_KEY`     | Clave de acceso de la cuenta          |
-| `AZURE_SHARE_NAME`      | Nombre del File Share                 |
-| `PLAYIT_SECRET`         | Secret key del agente de playit.gg    |
+## Como se guardan las contraseñas
 
-Variables opcionales del repositorio:
+AuthMe no guarda el texto original. Genera un salt aleatorio y un hash
+**Argon2id**; Supabase almacena el hash y los parametros necesarios para volver
+a calcularlo. Al iniciar sesion, AuthMe calcula el hash de lo escrito y compara
+el resultado. Un hash no se puede descifrar como si fuera texto cifrado, aunque
+una contraseña debil todavia puede adivinarse por fuerza bruta.
 
-| Variable     | Valor sugerido                                                  |
-| ------------ | --------------------------------------------------------------- |
-| `SERVER_JAR` | Nombre exacto del JAR de Forge si la deteccion automatica falla |
-| `JAVA_OPTS`  | `-Xms2G -Xmx5G -XX:+UseG1GC -XX:MaxGCPauseMillis=100`           |
+Hay dos conexiones diferentes:
 
-En playit.gg crea un tunel Minecraft Java hacia `127.0.0.1:25565` y usa su secret key como `PLAYIT_SECRET`.
+- Paper a Supabase usa PostgreSQL con SSL.
+- Java no-premium a Paper no tiene el cifrado normal de `online-mode`.
+
+Por esa segunda limitacion, incluso usando Argon2id se debe utilizar una
+contraseña exclusiva para el servidor. El hash protege la base de datos; no
+convierte el protocolo offline de Minecraft en una conexion cifrada de extremo
+a extremo.
+
+## Configurar Supabase
+
+Usa un proyecto Supabase activo. No se necesita Supabase Auth, REST ni una tabla
+publica: AuthMe se conecta directamente a PostgreSQL.
+
+Para evitar entregar a Minecraft el usuario administrador, ejecuta una vez este
+SQL en el SQL Editor. Sustituye la contraseña por una aleatoria, por ejemplo una
+generada con `openssl rand -hex 32`:
+
+```sql
+do $$
+begin
+  if not exists (
+    select 1 from pg_roles where rolname = 'minecraft_authme'
+  ) then
+    create role minecraft_authme;
+  end if;
+end
+$$;
+
+alter role minecraft_authme
+  login
+  password 'REEMPLAZA_CON_UNA_CLAVE_ALEATORIA';
+
+grant connect on database postgres to minecraft_authme;
+
+create schema if not exists minecraft_auth;
+revoke all on schema minecraft_auth from public;
+grant usage, create on schema minecraft_auth to minecraft_authme;
+revoke create on schema public from minecraft_authme;
+
+alter role minecraft_authme in database postgres
+  set search_path = minecraft_auth, pg_catalog;
+```
+
+El esquema queda administrado por el usuario del SQL Editor y el rol de AuthMe
+solamente recibe `USAGE` y `CREATE` dentro de `minecraft_auth`. Las tablas que
+cree AuthMe quedan bajo su propio control sin darle acceso de administrador.
+Como el esquema no esta expuesto por la Data API, los hashes no quedan
+consultables con las claves `anon` o `authenticated`.
+
+En `Connect > Session pooler` copia los datos de conexion. GitHub Actions usa
+IPv4 y AuthMe mantiene conexiones JDBC, por lo que debe usarse **Session mode,
+puerto 5432**, no Transaction mode 6543.
+
+Configura estos GitHub Secrets:
+
+| Secreto | Contenido |
+| --- | --- |
+| `RCLONE_CONF` | Configuracion de rclone con el remoto `oracle-mc` |
+| `PLAYIT_SECRET` | Secret key del agente de playit.gg |
+| `AUTH_DB_HOST` | Host del Session pooler, por ejemplo `aws-0-...pooler.supabase.com` |
+| `AUTH_DB_USER` | `minecraft_authme.REF_DEL_PROYECTO` |
+| `AUTH_DB_PASSWORD` | La contraseña aleatoria del rol |
+
+Variables opcionales:
+
+| Variable | Valor predeterminado |
+| --- | --- |
+| `AUTH_DB_PORT` | `5432` |
+| `AUTH_DB_NAME` | `postgres` |
+| `AUTH_DB_TABLE` | `authme` |
+| `PAPER_VERSION` | `26.2` |
+| `JAVA_OPTS` | `-Xms2G -Xmx12G -XX:+UseG1GC -XX:MaxGCPauseMillis=100 -XX:+ParallelRefProcEnabled` |
+| `OPS` | Nombres separados por comas; Bedrock normalmente comienza con `.` |
+
+La contraseña de PostgreSQL solo existe como GitHub Secret y dentro del runner
+mientras esta funcionando. `plugins/AuthMe/config.yml` se genera en cada run y
+esta excluido de la sincronizacion con Oracle.
+
+## Persistencia al terminar cada run
+
+Los datos se dividen asi:
+
+- Los registros y hashes de AuthMe se escriben inmediatamente en Supabase.
+- El mundo, inventarios, plugins y configuraciones no secretas se guardan en
+  `oracle-mc:minecraft-bucket`.
+- Cada 15 minutos se ejecuta `save-off`, `save-all flush`, rclone y `save-on`.
+- Como maximo a los 335 minutos desde que comienza el job se envia
+  `save-all flush` y `stop`, se espera a que Paper y AuthMe cierren, y despues
+  se realiza una sincronizacion final.
+
+El workflow tiene 355 minutos de limite. El plazo de cierre se calcula en el
+primer paso del job, por lo que descargas y restauraciones tambien consumen los
+335 minutos y siempre quedan aproximadamente 20 minutos para cerrar y copiar.
+Si el runner desaparece sin permitir el cierre, los usuarios de AuthMe siguen
+seguros en Supabase y el mundo puede perder como maximo los cambios posteriores
+a la ultima copia periodica.
+
+El mundo viejo de RLCraft no es compatible con Paper. Se conserva sin cargar y
+Paper crea un mundo nuevo llamado `paper-world`.
+
+## Tuneles de playit.gg
+
+Crea dos tuneles con la misma secret key del agente:
+
+1. Minecraft Java, TCP, destino `127.0.0.1:25565`.
+2. Minecraft Bedrock, UDP, destino `127.0.0.1:19132`.
+
+Java usa la direccion del primer tunel. Android agrega un servidor externo con
+la direccion y puerto del segundo.
 
 ## Primera prueba
 
-1. Sube el Server Pack a Azure Files.
-2. Configura los cuatro secretos.
-3. Abre `Actions > RLCraft temporal > Run workflow`.
-4. Usa entre 10 y 30 minutos para la primera prueba.
-5. Revisa que aparezcan el mundo y los logs actualizados en `minecraft/` dentro de Azure Files.
+1. Haz una copia del bucket anterior de RLCraft.
+2. Configura Supabase, los GitHub Secrets y los dos tuneles.
+3. Ejecuta `Actions > Minecraft Paper Crossplay > Run workflow` durante 10 a 30
+   minutos.
+4. Comprueba que carguen Paper, Geyser, Floodgate y AuthMe.
+5. Registra una cuenta Java no-premium y una cuenta Android.
+6. Deten el run y confirma que el mismo usuario puede volver a usar `/login` en
+   el siguiente run.
 
-Los horarios automaticos solo funcionan cuando el workflow se encuentra en la rama predeterminada del repositorio.
-
-## Limitaciones
-
-GitHub Actions esta destinado a desarrollo, pruebas y despliegues, no a hosting permanente. GitHub puede cancelar o restringir este uso. Tampoco existe garantia de arranque puntual, continuidad entre turnos ni ejecucion del respaldo si el runner desaparece abruptamente.
+GitHub Actions esta orientado a automatizacion y pruebas, no garantiza hosting
+continuo ni arranques puntuales. El workflow conserva los horarios existentes.
