@@ -31,7 +31,7 @@ jobs:
       AUTH_DB_NAME: ${{ vars.AUTH_DB_NAME || 'postgres' }}
       AUTH_DB_TABLE: ${{ vars.AUTH_DB_TABLE || 'authme' }}
       PAPER_VERSION: ${{ vars.PAPER_VERSION || '26.2' }}
-      PLAYIT_IMAGE: ${{ vars.PLAYIT_IMAGE || 'ghcr.io/playit-cloud/playit-agent:0.17' }}
+      PLAYIT_IMAGE: ${{ vars.PLAYIT_IMAGE || 'ghcr.io/playit-cloud/playit-agent:0.17.1' }}
       JAVA_PUBLIC_ADDRESS: ${{ vars.JAVA_PUBLIC_ADDRESS || 'bounce-cart.tun.ply.gg:25565' }}
       BEDROCK_PUBLIC_ADDRESS: ${{ vars.BEDROCK_PUBLIC_ADDRESS || '147.185.221.231:38579' }}
       HEALTHCHECK_INTERVAL: ${{ vars.HEALTHCHECK_INTERVAL || '300' }}
