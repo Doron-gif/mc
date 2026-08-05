@@ -14,9 +14,12 @@ readonly AUTHME_VERSION="6.0.0"
 readonly AUTHME_JAR="plugins/AuthMe-$AUTHME_VERSION-Paper.jar"
 readonly AUTHME_CONFIG="plugins/AuthMe/config.yml"
 readonly PROJECT_DIR="${GITHUB_WORKSPACE:-$PWD}"
+readonly PLAYIT_IMAGE="${PLAYIT_IMAGE:-ghcr.io/playit-cloud/playit-agent:0.17}"
+readonly HEALTHCHECK_INTERVAL="${HEALTHCHECK_INTERVAL:-300}"
 
 SERVER_PID=""
 PLAYIT_PID=""
+HEALTHCHECK_PID=""
 CONSOLE_FD_OPEN=false
 STATE_LOADED=false
 
@@ -199,7 +202,7 @@ run_playit() {
         echo "Iniciando agente de playit (intento $attempt)..."
         if docker run --rm --network host --name minecraft-playit \
             -e SECRET_KEY="$PLAYIT_SECRET" \
-            ghcr.io/playit-cloud/playit-agent:0.17; then
+            "$PLAYIT_IMAGE"; then
             echo "El agente de playit termino normalmente."
         else
             echo "El agente de playit fallo; reintentando con otro relay en 10 segundos."
@@ -208,6 +211,128 @@ run_playit() {
         kill -0 "$SERVER_PID" 2>/dev/null || break
         sleep 10
         attempt=$((attempt + 1))
+    done
+}
+
+wait_for_server_ready() {
+    for _ in $(seq 1 180); do
+        kill -0 "$SERVER_PID" 2>/dev/null || return 1
+        if grep -Fq "Done (" logs/latest.log 2>/dev/null; then
+            return 0
+        fi
+        sleep 2
+    done
+
+    echo "Minecraft no termino de arrancar dentro de 6 minutos."
+    return 1
+}
+
+run_diagnostic_report() {
+    local failures=0
+    local java_local_ok=false
+    local bedrock_local_ok=false
+    local playit_ok=false
+    local java_public_ok=skipped
+    local bedrock_public_ok=skipped
+    local playit_state
+
+    echo "::group::Diagnostico Minecraft $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+
+    if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo "[OK] Proceso Paper: PID $SERVER_PID activo"
+    else
+        echo "[FALLO] Proceso Paper: no esta activo"
+        echo "::error title=Paper detenido::El proceso de Minecraft termino inesperadamente."
+        failures=$((failures + 1))
+    fi
+
+    if python3 "$PROJECT_DIR/scripts/diagnose-minecraft.py" \
+        java "127.0.0.1:25565" --label "Paper local"; then
+        java_local_ok=true
+    else
+        echo "::warning title=Paper no responde::El puerto local 25565 no completo el ping de Minecraft Java."
+        failures=$((failures + 1))
+    fi
+
+    if python3 "$PROJECT_DIR/scripts/diagnose-minecraft.py" \
+        bedrock "127.0.0.1:19132" --label "Geyser local"; then
+        bedrock_local_ok=true
+    else
+        echo "::warning title=Geyser no responde::El puerto UDP local 19132 no completo el ping de Bedrock."
+        failures=$((failures + 1))
+    fi
+
+    playit_state="$(docker inspect --format '{{.State.Status}}' minecraft-playit 2>/dev/null || true)"
+    if [[ "$playit_state" == "running" ]]; then
+        echo "[OK] Agente playit: contenedor activo con $PLAYIT_IMAGE"
+        playit_ok=true
+    else
+        echo "[FALLO] Agente playit: estado=${playit_state:-no encontrado}"
+        echo "::warning title=playit detenido::El contenedor del agente no esta ejecutandose."
+        failures=$((failures + 1))
+    fi
+
+    if [[ -n "${JAVA_PUBLIC_ADDRESS:-}" ]]; then
+        java_public_ok=false
+        if python3 "$PROJECT_DIR/scripts/diagnose-minecraft.py" \
+            java "$JAVA_PUBLIC_ADDRESS" --label "Tunel publico Java"; then
+            java_public_ok=true
+        else
+            echo "::warning title=Tunel Java caido::Paper puede estar activo, pero la direccion publica Java no respondio."
+            failures=$((failures + 1))
+        fi
+    else
+        echo "[OMITIDO] Tunel publico Java: configura JAVA_PUBLIC_ADDRESS para probarlo"
+    fi
+
+    if [[ -n "${BEDROCK_PUBLIC_ADDRESS:-}" ]]; then
+        bedrock_public_ok=false
+        if python3 "$PROJECT_DIR/scripts/diagnose-minecraft.py" \
+            bedrock "$BEDROCK_PUBLIC_ADDRESS" --label "Tunel publico Bedrock"; then
+            bedrock_public_ok=true
+        else
+            echo "::warning title=Tunel Bedrock caido::Geyser puede estar activo, pero la direccion publica Bedrock no respondio."
+            failures=$((failures + 1))
+        fi
+    else
+        echo "[OMITIDO] Tunel publico Bedrock: configura BEDROCK_PUBLIC_ADDRESS para probarlo"
+    fi
+
+    if [[ "$java_local_ok" == false ]]; then
+        echo "[DIAGNOSTICO] El fallo Java esta en Paper o antes de abrir el puerto local 25565."
+    elif [[ "$playit_ok" == false ]]; then
+        echo "[DIAGNOSTICO] Paper funciona localmente, pero el agente de playit esta detenido."
+    elif [[ "$java_public_ok" == false ]]; then
+        echo "[DIAGNOSTICO] Paper funciona localmente; el fallo Java esta en el tunel, su agente o su asignacion publica."
+    elif [[ "$java_public_ok" == true ]]; then
+        echo "[DIAGNOSTICO] La ruta Java completa funciona; un fallo restante estaria en el cliente, su version o autenticacion."
+    fi
+
+    if [[ "$bedrock_local_ok" == false ]]; then
+        echo "[DIAGNOSTICO] El fallo Bedrock esta en Geyser o antes de abrir el puerto UDP local 19132."
+    elif [[ "$playit_ok" == false ]]; then
+        echo "[DIAGNOSTICO] Geyser funciona localmente, pero el agente de playit esta detenido."
+    elif [[ "$bedrock_public_ok" == false ]]; then
+        echo "[DIAGNOSTICO] Geyser funciona localmente; el fallo Bedrock esta en el tunel, su agente o su asignacion publica."
+    elif [[ "$bedrock_public_ok" == true ]]; then
+        echo "[DIAGNOSTICO] La ruta Bedrock completa funciona; un fallo restante estaria en el cliente, su version o autenticacion."
+    fi
+
+    if ((failures == 0)); then
+        echo "[OK] Todas las comprobaciones configuradas pasaron."
+    else
+        echo "[RESUMEN] $failures comprobacion(es) fallaron; revisa los mensajes [DIAGNOSTICO] anteriores."
+    fi
+    echo "::endgroup::"
+
+    ((failures == 0))
+}
+
+monitor_health() {
+    while kill -0 "$SERVER_PID" 2>/dev/null; do
+        sleep "$HEALTHCHECK_INTERVAL"
+        kill -0 "$SERVER_PID" 2>/dev/null || break
+        run_diagnostic_report || true
     done
 }
 
@@ -266,6 +391,11 @@ cleanup() {
     local original_status=$?
     trap - EXIT INT TERM
     set +e
+
+    if [[ -n "$HEALTHCHECK_PID" ]] && kill -0 "$HEALTHCHECK_PID" 2>/dev/null; then
+        kill "$HEALTHCHECK_PID"
+        wait "$HEALTHCHECK_PID"
+    fi
 
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
         echo "Deteniendo Minecraft de forma segura..."
@@ -332,6 +462,10 @@ if [[ -n "${RUN_DEADLINE_EPOCH:-}" ]] && [[ ! "$RUN_DEADLINE_EPOCH" =~ ^[0-9]+$ 
     echo "RUN_DEADLINE_EPOCH debe ser un timestamp numerico."
     exit 1
 fi
+[[ "$HEALTHCHECK_INTERVAL" =~ ^[0-9]+$ ]] && ((HEALTHCHECK_INTERVAL >= 60)) || {
+    echo "HEALTHCHECK_INTERVAL debe ser un numero de segundos igual o mayor que 60."
+    exit 1
+}
 
 mkdir -p "$LOCAL_DIR"
 
@@ -397,6 +531,19 @@ PLAYIT_PID=$!
 echo "Supervisor de playit iniciado en segundo plano."
 configure_geyser
 configure_ops
+
+if wait_for_server_ready; then
+    # Da tiempo a que playit termine de registrar los tuneles antes de probar la ruta publica.
+    sleep 10
+    run_diagnostic_report || true
+    monitor_health &
+    HEALTHCHECK_PID=$!
+    echo "Monitor de salud iniciado; repetira el diagnostico cada $HEALTHCHECK_INTERVAL segundos."
+else
+    echo "::error title=Arranque incompleto::Paper no llego al estado Done."
+    run_diagnostic_report || true
+    exit 1
+fi
 
 while kill -0 "$SERVER_PID" 2>/dev/null; do
     remaining=$((end_time - $(date +%s)))
