@@ -199,7 +199,7 @@ run_playit() {
         echo "Iniciando agente de playit (intento $attempt)..."
         if docker run --rm --network host --name minecraft-playit \
             -e SECRET_KEY="$PLAYIT_SECRET" \
-            ghcr.io/playit-cloud/playit-agent:1.0; then
+            ghcr.io/playit-cloud/playit-agent:0.17; then
             echo "El agente de playit termino normalmente."
         else
             echo "El agente de playit fallo; reintentando con otro relay en 10 segundos."
