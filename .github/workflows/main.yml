@@ -52,7 +52,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq libargon2-1 postgresql-client python3-yaml rclone
-          docker pull ghcr.io/playit-cloud/playit-agent:1.0
+          docker pull ghcr.io/playit-cloud/playit-agent:0.17
 
       - name: Configurar Oracle S3 (rclone)
         run: |
