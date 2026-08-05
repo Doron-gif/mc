@@ -74,6 +74,7 @@ jobs:
           printf '%s\n' "$RCLONE_CONF_CONTENT" > ~/.config/rclone/rclone.conf
 
       - name: Abrir SSH temporal gratis con tmate
+        id: tmate
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_ssh }}
         uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24
         with:
@@ -81,4 +82,11 @@ jobs:
           limit-access-to-actor: true
 
       - name: Ejecutar Servidor
-        run: bash ./scripts/run-server.sh
+        env:
+          TMATE_SSH_COMMAND: ${{ steps.tmate.outputs.ssh-command }}
+        run: |
+          if [[ -n "$TMATE_SSH_COMMAND" ]]; then
+            echo "::notice title=SSH tmate activo::$TMATE_SSH_COMMAND"
+            echo "SSH tmate activo: $TMATE_SSH_COMMAND"
+          fi
+          exec bash ./scripts/run-server.sh
