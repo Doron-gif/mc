@@ -14,7 +14,7 @@ readonly AUTHME_VERSION="6.0.0"
 readonly AUTHME_JAR="plugins/AuthMe-$AUTHME_VERSION-Paper.jar"
 readonly AUTHME_CONFIG="plugins/AuthMe/config.yml"
 readonly PROJECT_DIR="${GITHUB_WORKSPACE:-$PWD}"
-readonly PLAYIT_IMAGE="${PLAYIT_IMAGE:-ghcr.io/playit-cloud/playit-agent:0.17}"
+readonly PLAYIT_IMAGE="${PLAYIT_IMAGE:-ghcr.io/playit-cloud/playit-agent:0.17.1}"
 readonly HEALTHCHECK_INTERVAL="${HEALTHCHECK_INTERVAL:-300}"
 
 SERVER_PID=""
