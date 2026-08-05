@@ -31,6 +31,10 @@ jobs:
       AUTH_DB_NAME: ${{ vars.AUTH_DB_NAME || 'postgres' }}
       AUTH_DB_TABLE: ${{ vars.AUTH_DB_TABLE || 'authme' }}
       PAPER_VERSION: ${{ vars.PAPER_VERSION || '26.2' }}
+      PLAYIT_IMAGE: ${{ vars.PLAYIT_IMAGE || 'ghcr.io/playit-cloud/playit-agent:0.17' }}
+      JAVA_PUBLIC_ADDRESS: ${{ vars.JAVA_PUBLIC_ADDRESS || 'bounce-cart.tun.ply.gg:25565' }}
+      BEDROCK_PUBLIC_ADDRESS: ${{ vars.BEDROCK_PUBLIC_ADDRESS || '147.185.221.231:38579' }}
+      HEALTHCHECK_INTERVAL: ${{ vars.HEALTHCHECK_INTERVAL || '300' }}
       JAVA_OPTS: ${{ vars.JAVA_OPTS }}
       OPS: ${{ vars.OPS }}
       RUNTIME_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.runtime_minutes || 335 }}
@@ -52,7 +56,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq libargon2-1 postgresql-client python3-yaml rclone
-          docker pull ghcr.io/playit-cloud/playit-agent:0.17
+          docker pull "$PLAYIT_IMAGE"
 
       - name: Configurar Oracle S3 (rclone)
         run: |
