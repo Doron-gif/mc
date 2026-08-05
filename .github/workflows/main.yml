@@ -8,6 +8,11 @@ on:
         required: true
         default: 335
         type: number
+      enable_ssh:
+        description: Abrir SSH temporal gratis con tmate
+        required: true
+        default: false
+        type: boolean
   schedule:
     - cron: "0 19,1 * * *"
 
@@ -45,6 +50,8 @@ jobs:
 
       - name: Obtener configuracion
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Instalar Java 25
         uses: actions/setup-java@v4
@@ -59,9 +66,19 @@ jobs:
           docker pull "$PLAYIT_IMAGE"
 
       - name: Configurar Oracle S3 (rclone)
+        env:
+          RCLONE_CONF_CONTENT: ${{ secrets.RCLONE_CONF }}
         run: |
-          mkdir -p ~/.config/rclone
-          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+          install -d -m 700 ~/.config/rclone
+          umask 077
+          printf '%s\n' "$RCLONE_CONF_CONTENT" > ~/.config/rclone/rclone.conf
+
+      - name: Abrir SSH temporal gratis con tmate
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_ssh }}
+        uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24
+        with:
+          detached: true
+          limit-access-to-actor: true
 
       - name: Ejecutar Servidor
         run: bash ./scripts/run-server.sh
