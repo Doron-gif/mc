@@ -13,11 +13,14 @@ on:
         required: true
         default: false
         type: boolean
+
   schedule:
-    - cron: "17 12,18 * * *"
+    # 18:00 UTC = 13:00 hora de Peru
+    - cron: "0 18 * * *"
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: minecraft-server
@@ -27,6 +30,7 @@ jobs:
   server:
     runs-on: ubuntu-latest
     timeout-minutes: 355
+
     env:
       PLAYIT_SECRET: ${{ secrets.PLAYIT_SECRET }}
       AUTH_DB_HOST: ${{ secrets.AUTH_DB_HOST }}
@@ -46,7 +50,8 @@ jobs:
 
     steps:
       - name: Reservar margen para el cierre
-        run: echo "RUN_DEADLINE_EPOCH=$(($(date +%s) + 335 * 60))" >> "$GITHUB_ENV"
+        run: |
+          echo "RUN_DEADLINE_EPOCH=$(($(date +%s) + ${RUNTIME_MINUTES} * 60))" >> "$GITHUB_ENV"
 
       - name: Obtener configuracion
         uses: actions/checkout@v4
@@ -89,4 +94,15 @@ jobs:
             echo "::notice title=SSH tmate activo::$TMATE_SSH_COMMAND"
             echo "SSH tmate activo: $TMATE_SSH_COMMAND"
           fi
+
           exec bash ./scripts/run-server.sh
+
+      - name: Iniciar segunda ejecucion
+        if: ${{ success() && github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run main.yml \
+            --ref main \
+            -f runtime_minutes=335 \
+            -f enable_ssh=false
